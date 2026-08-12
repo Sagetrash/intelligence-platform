@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import { pool } from './db';
+import eventRoutes from './api/routes/events';
 
 dotenv.config();
 
@@ -15,6 +16,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+
+
+app.use('/events', eventRoutes);
 
 app.get('/health', (req: Request, res: Response) => {
   res.json({
