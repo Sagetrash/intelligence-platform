@@ -1,4 +1,5 @@
-import { query } from "../db";
+import { PoolClient } from "pg";
+import { pool } from "../db";
 
 export interface CreateEventInput {
   source: string;
@@ -21,18 +22,38 @@ export async function ingestEvent(input: CreateEventInput): Promise<IngestEventR
     ON CONFLICT (source, external_event_id) DO NOTHING
     RETURNING *;
     `;
-  const result = await query(insertSql, [
-    source,
-    external_event_id,
-    event_type,
-    payload,
-    occurred_at,
-  ]);
-  if (result.rows.length === 0 && external_event_id) {
-    const existing = await query(
-      `SELECT * FROM events WHERE source = $1 AND external_event_id = $2;`, [source, external_event_id]
-    );
-    return { event: existing.rows[0], isDuplicate: true };
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(insertSql, [
+      source,
+      external_event_id,
+      event_type,
+      payload,
+      occurred_at,
+    ]);
+    if (result.rows.length === 0 && external_event_id) {
+      const existing = await client.query(
+        `SELECT * FROM events WHERE source = $1 AND external_event_id = $2;`, [source, external_event_id]
+      );
+      await client.query("COMMIT");
+      return { event: existing.rows[0], isDuplicate: true };
+    }
+    
+    const newEvent = result.rows[0];
+    await scheduleEventJob(client, newEvent.id);
+    await client.query('COMMIT');
+    
+    return { event: result.rows[0], isDuplicate: false };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
   }
-  return { event: result.rows[0], isDuplicate: false };
+}
+
+export async function scheduleEventJob(client:PoolClient,eventId: string) {
+  const sql = `INSERT INTO event_jobs (event_id) VALUES ($1);`;
+  await client.query(sql, [eventId]);
 }
